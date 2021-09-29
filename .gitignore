@@ -47,5 +47,6 @@ venv/
 .dmypy.json
 cython_debug/
 debug/
+target/
 Cargo.lock
 **/*.rs.bk
