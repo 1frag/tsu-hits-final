@@ -7,6 +7,9 @@ pub struct LibError {
     detail: String,
 }
 
+unsafe impl Send for LibError {}
+unsafe impl Sync for LibError {}
+
 impl From<tokio_postgres::Error> for LibError {
     fn from(e: tokio_postgres::Error) -> Self {
         LibError {code: 1, detail: format!("{:?}", e)}
