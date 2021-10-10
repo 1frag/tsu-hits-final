@@ -48,3 +48,20 @@ async def test_uuid():
         SELECT * FROM abc WHERE name = 'test_uuid'
     """)
     assert dict(row) == {'id': uid, 'name': 'test_uuid'}
+
+
+@pytest.mark.parametrize('tpe', ['jsonb', 'json'])
+async def test_jsons(tpe):
+    obj = '{"a": "b", "c": [1,  2,3]}'
+    conn = await postgres_gateway.connect(POSTGRES_DSN)
+    row = await conn.fetchrow(f"""
+        select
+            'null'::{tpe}             AS nil,
+            '{obj}'::{tpe}            AS one,
+            '2'::{tpe}                AS two,
+            '"123"'::{tpe}            AS three,
+            '["ab", 1, false]'::{tpe} AS four;
+    """)
+    assert dict(row) == {
+        'nil': None, 'one': {'a': 'b', 'c': [1, 2, 3]}, 'two': 2, 'three': '123', 'four': ['ab', 1, False]
+    }

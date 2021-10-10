@@ -5,15 +5,16 @@ use byteorder::{BigEndian, ReadBytesExt};
 use deadpool_postgres::tokio_postgres::types::Type;
 use once_cell::sync::OnceCell;
 use postgres_types::FromSql;
-use pyo3::{
-    exceptions::PyKeyError, prelude::*, types::IntoPyDict, wrap_pyfunction, PyMappingProtocol,
-};
-use std::{error::Error, ops::Index, sync::Arc};
+use pyo3::{exceptions::PyKeyError, prelude::*, wrap_pyfunction, PyMappingProtocol};
+use serde_json::Value;
+use std::{collections::HashMap, error::Error, ops::Index, sync::Arc};
 use tokio_postgres::NoTls;
 
 #[derive(Clone)]
 pub struct Config {
     pub uuid_class: PyObject,
+    pub setattr: PyObject,
+    pub safe_unknown: PyObject,
 }
 
 static mut CONFIG: OnceCell<Config> = OnceCell::new();
@@ -94,13 +95,50 @@ impl ToPyObject for PyUUID {
             .getattr(py, "__new__")
             .unwrap()
             .call1(py, (&cfg.uuid_class,))
-            .unwrap()
-            .to_object(py);
-        let d = [("obj", &obj), ("int_value", &self.0.to_object(py))].into_py_dict(py);
-        py.eval("object.__setattr__(obj, 'int', int_value)", None, Some(d))
-            .unwrap()
-            .to_object(py);
+            .unwrap();
+        cfg.setattr
+            .call1(py, (&obj, "int", &self.0.to_object(py)))
+            .unwrap();
+        cfg.setattr
+            .call1(py, (&obj, "is_safe", &cfg.safe_unknown))
+            .unwrap();
         obj
+    }
+}
+
+#[pyfunction]
+fn create_uuid(py: Python, int: u128) -> PyObject {
+    PyUUID(int).to_object(py)
+}
+
+struct PyJson(serde_json::Value);
+
+impl ToPyObject for PyJson {
+    fn to_object(&self, py: Python) -> PyObject {
+        match &self.0 {
+            Value::Null => py.None(),
+            Value::Bool(x) => x.to_object(py),
+            Value::Number(x) => {
+                if x.is_u64() {
+                    x.as_u64().to_object(py)
+                } else if x.is_i64() {
+                    x.as_i64().to_object(py)
+                } else {
+                    x.as_f64().to_object(py)
+                }
+            }
+            Value::String(x) => x.to_object(py),
+            Value::Array(x) => x
+                .iter()
+                .map(|x| PyJson(x.clone()).to_object(py))
+                .collect::<Vec<PyObject>>()
+                .to_object(py),
+            Value::Object(x) => x
+                .iter()
+                .map(|(key, value)| (key.to_string(), PyJson(value.clone()).to_object(py)))
+                .collect::<HashMap<String, PyObject>>()
+                .to_object(py),
+        }
     }
 }
 
@@ -118,6 +156,8 @@ fn adapt(py: Python, row: &tokio_postgres::Row, ind: usize) -> PyObject {
         "bpchar" => row.get::<_, String>(ind).to_object(py),
         "bool" => row.get::<_, bool>(ind).to_object(py),
         "uuid" => row.get::<_, PyUUID>(ind).to_object(py),
+        "json" => PyJson(row.get::<_, serde_json::Value>(ind)).to_object(py),
+        "jsonb" => PyJson(row.get::<_, serde_json::Value>(ind)).to_object(py),
         other => {
             let any_value = row.get::<_, AnyType>(ind).0;
             println!("{:?} {:?}", other, any_value);
@@ -231,11 +271,23 @@ fn postgres_gateway(py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<Connection>()?;
     m.add_class::<Row>()?;
     m.add_function(wrap_pyfunction!(connect, m)?)?;
+    m.add_function(wrap_pyfunction!(create_uuid, m)?)?;
 
     let uuid_module = py.import("uuid")?;
     let uuid_class = uuid_module.getattr("UUID")?.to_object(py);
+    let setattr = py.eval("object.__setattr__", None, None)?.to_object(py);
+    let safe_unknown = uuid_module
+        .getattr("SafeUUID")?
+        .getattr("unknown")?
+        .to_object(py);
     unsafe {
-        assert!(CONFIG.set(Config { uuid_class }).is_ok());
+        assert!(CONFIG
+            .set(Config {
+                uuid_class,
+                setattr,
+                safe_unknown
+            })
+            .is_ok());
     }
     Ok(())
 }
