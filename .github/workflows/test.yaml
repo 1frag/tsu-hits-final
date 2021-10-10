@@ -19,15 +19,14 @@ jobs:
       - name: Install rust toolchain
         uses: actions-rs/toolchain@v1
         with:
-          toolchain: 1.55.0
           default: true
           components: rustfmt
+      - run: cd postgres_gateway
       - name: Ensure `cargo fmt` has been run
         uses: actions-rs/cargo@v1
         with:
           command: fmt
           args: -- --check
-      - run: cd postgres_gateway
       - run: pip install -r requirements/requirements.txt -r requirements/requirements.test.txt
       - run: python setup.py develop
       - run: pytest -vv
