@@ -28,6 +28,7 @@ jobs:
         with:
           command: fmt
           args: --manifest-path postgres_gateway/Cargo.toml -- --check
+      - run: echo "POSTGRES_DSN=postgresql://postgres:@localhost:5432/postgres" >> ${GITHUB_ENV}
       - run: pip install -r requirements/requirements.txt -r requirements/requirements.test.txt
         working-directory: ./postgres_gateway
       - run: python setup.py develop

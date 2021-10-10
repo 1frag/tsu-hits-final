@@ -1,12 +1,13 @@
 import pytest as pytest
 
 import postgres_gateway
+from constants import POSTGRES_DSN
 
 pytestmark = pytest.mark.asyncio
 
 
 async def test_execute():
-    conn = await postgres_gateway.connect('postgres://postgres:postgres@0.0.0.0:5432/postgres')
+    conn = await postgres_gateway.connect(POSTGRES_DSN)
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS abc(
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
