@@ -1,9 +1,11 @@
-# The script is executed without error when the module is correctly implemented
+import pytest as pytest
+
 import postgres_gateway
-import asyncio
+
+pytestmark = pytest.mark.asyncio
 
 
-async def main():
+async def test_execute():
     conn = await postgres_gateway.connect('postgres://postgres:postgres@0.0.0.0:5432/postgres')
     await conn.execute("""
         CREATE TABLE IF NOT EXISTS abc(
@@ -13,8 +15,3 @@ async def main():
     """)
     affected = await conn.execute("INSERT INTO abc (name) VALUES ('789');")
     assert affected == 1
-    print('success')
-
-
-if __name__ == '__main__':
-    asyncio.run(main())

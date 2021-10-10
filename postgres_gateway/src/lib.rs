@@ -30,13 +30,13 @@ impl Row {
 }
 
 fn adapt(py: Python, row: &tokio_postgres::Row, ind: usize) -> PyObject {
-    match row.columns().index(ind).name() {
+    match row.columns().index(ind).type_().name() {
         "int2" => row.get::<_, i16>(ind).to_object(py),
         "int4" => row.get::<_, i32>(ind).to_object(py),
         "int8" => row.get::<_, i64>(ind).to_object(py),
         "text" => row.get::<_, String>(ind).to_object(py),
         "bool" => row.get::<_, bool>(ind).to_object(py),
-        _ => todo!(),
+        other => { println!("{:?}", other); todo!() },
     }
 }
 
