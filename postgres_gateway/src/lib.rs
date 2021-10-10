@@ -1,9 +1,22 @@
 mod errors;
 
 use crate::errors::LibError;
-use pyo3::{exceptions::PyKeyError, prelude::*, wrap_pyfunction, PyMappingProtocol};
-use std::{ops::Index, sync::Arc};
+use byteorder::{BigEndian, ReadBytesExt};
+use deadpool_postgres::tokio_postgres::types::Type;
+use once_cell::sync::OnceCell;
+use postgres_types::FromSql;
+use pyo3::{
+    exceptions::PyKeyError, prelude::*, types::IntoPyDict, wrap_pyfunction, PyMappingProtocol,
+};
+use std::{error::Error, ops::Index, sync::Arc};
 use tokio_postgres::NoTls;
+
+#[derive(Clone)]
+pub struct Config {
+    pub uuid_class: PyObject,
+}
+
+static mut CONFIG: OnceCell<Config> = OnceCell::new();
 
 #[pyclass]
 #[derive(Clone)]
@@ -29,16 +42,86 @@ impl Row {
     }
 }
 
+struct Nullable(bool);
+
+impl<'a> FromSql<'a> for Nullable {
+    #[inline]
+    fn from_sql(_ty: &Type, _raw: &'a [u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
+        Ok(Nullable(false))
+    }
+    #[inline]
+    fn from_sql_null(_ty: &Type) -> Result<Self, Box<dyn Error + Sync + Send>> {
+        Ok(Nullable(true))
+    }
+    #[inline]
+    fn accepts(_ty: &Type) -> bool {
+        true
+    }
+}
+
+struct AnyType(Vec<u8>);
+
+impl<'a> FromSql<'a> for AnyType {
+    #[inline]
+    fn from_sql(_ty: &Type, raw: &'a [u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
+        Ok(AnyType(raw.to_vec()))
+    }
+    #[inline]
+    fn accepts(_ty: &Type) -> bool {
+        true
+    }
+}
+
+struct PyUUID(u128);
+
+impl<'a> FromSql<'a> for PyUUID {
+    #[inline]
+    fn from_sql(_ty: &Type, mut raw: &'a [u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
+        let v = raw.read_u128::<BigEndian>()?;
+        Ok(PyUUID(v))
+    }
+    #[inline]
+    fn accepts(_ty: &Type) -> bool {
+        true
+    }
+}
+
+impl ToPyObject for PyUUID {
+    fn to_object(&self, py: Python) -> PyObject {
+        let cfg = unsafe { CONFIG.get() }.unwrap();
+        let obj = cfg
+            .uuid_class
+            .getattr(py, "__new__")
+            .unwrap()
+            .call1(py, (&cfg.uuid_class,))
+            .unwrap()
+            .to_object(py);
+        let d = [("obj", &obj), ("int_value", &self.0.to_object(py))].into_py_dict(py);
+        py.eval("object.__setattr__(obj, 'int', int_value)", None, Some(d))
+            .unwrap()
+            .to_object(py);
+        obj
+    }
+}
+
 fn adapt(py: Python, row: &tokio_postgres::Row, ind: usize) -> PyObject {
+    if row.get::<_, Nullable>(ind).0 {
+        return py.None();
+    }
     match row.columns().index(ind).type_().name() {
         "int2" => row.get::<_, i16>(ind).to_object(py),
         "int4" => row.get::<_, i32>(ind).to_object(py),
         "int8" => row.get::<_, i64>(ind).to_object(py),
         "text" => row.get::<_, String>(ind).to_object(py),
+        "varchar" => row.get::<_, String>(ind).to_object(py),
+        "char" => row.get::<_, String>(ind).to_object(py),
+        "bpchar" => row.get::<_, String>(ind).to_object(py),
         "bool" => row.get::<_, bool>(ind).to_object(py),
+        "uuid" => row.get::<_, PyUUID>(ind).to_object(py),
         other => {
-            println!("{:?}", other);
-            todo!()
+            let any_value = row.get::<_, AnyType>(ind).0;
+            println!("{:?} {:?}", other, any_value);
+            any_value.to_object(py)
         }
     }
 }
@@ -83,7 +166,6 @@ impl Connection {
             .query_one(query.as_str(), &[])
             .await
             .map_err(LibError::from)?;
-        println!("{:?}", row);
         Ok(Row { _row: row })
     }
 
@@ -145,9 +227,15 @@ fn connect(py: Python, dsn: String) -> PyResult<&PyAny> {
 }
 
 #[pymodule]
-fn postgres_gateway(_py: Python<'_>, m: &PyModule) -> PyResult<()> {
+fn postgres_gateway(py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<Connection>()?;
     m.add_class::<Row>()?;
     m.add_function(wrap_pyfunction!(connect, m)?)?;
+
+    let uuid_module = py.import("uuid")?;
+    let uuid_class = uuid_module.getattr("UUID")?.to_object(py);
+    unsafe {
+        assert!(CONFIG.set(Config { uuid_class }).is_ok());
+    }
     Ok(())
 }
