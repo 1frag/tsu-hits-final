@@ -36,7 +36,10 @@ fn adapt(py: Python, row: &tokio_postgres::Row, ind: usize) -> PyObject {
         "int8" => row.get::<_, i64>(ind).to_object(py),
         "text" => row.get::<_, String>(ind).to_object(py),
         "bool" => row.get::<_, bool>(ind).to_object(py),
-        other => { println!("{:?}", other); todo!() },
+        other => {
+            println!("{:?}", other);
+            todo!()
+        }
     }
 }
 
