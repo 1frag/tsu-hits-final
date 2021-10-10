@@ -1,19 +1,9 @@
 mod errors;
 
-use std::collections::HashMap;
-use std::error::Error;
-use std::sync::Arc;
-use deadpool_postgres::tokio_postgres::Column;
-use deadpool_postgres::tokio_postgres::types::Type;
-use pyo3::prelude::*;
-use pyo3::{PyMappingProtocol, wrap_pyfunction};
-use pyo3::exceptions::PyKeyError;
-use pyo3::ffi::PyLongObject;
-use pyo3::types::{PyInt, PyLong};
-use tokio_postgres::NoTls;
-use tokio_postgres::types::FromSql;
-use std::os::raw::c_long;
 use crate::errors::LibError;
+use pyo3::{exceptions::PyKeyError, prelude::*, wrap_pyfunction, PyMappingProtocol};
+use std::{ops::Index, sync::Arc};
+use tokio_postgres::NoTls;
 
 #[pyclass]
 #[derive(Clone)]
@@ -39,96 +29,57 @@ impl Row {
     }
 }
 
-struct Value {
-    type_value: String,
-    data: Vec<u8>,
-}
-
-impl<'a> FromSql<'a> for Value {
-    fn from_sql(ty: &Type, raw: &'a [u8]) -> Result<Self, Box<dyn Error + Sync + Send>> {
-        Ok(Value {
-            type_value: ty.name().to_string(),
-            data: Vec::from(raw),
-        })
-    }
-
-    fn accepts(ty: &Type) -> bool {
-        true
-    }
-}
-
-impl ToPyObject for Value {
-    fn to_object(&self, py: Python) -> PyObject {
-        match self.type_value.as_str() {
-            "int2" => unsafe {
-                i16::from_be_bytes([
-                    *self.data.get_unchecked(0),
-                    *self.data.get_unchecked(1),
-                ]).to_object(py)
-            },
-            "int4" => unsafe {
-                i32::from_be_bytes([
-                    *self.data.get_unchecked(0),
-                    *self.data.get_unchecked(1),
-                    *self.data.get_unchecked(2),
-                    *self.data.get_unchecked(3),
-                ]).to_object(py)
-            },
-            "int8" => unsafe {
-                i64::from_be_bytes([
-                    *self.data.get_unchecked(0),
-                    *self.data.get_unchecked(1),
-                    *self.data.get_unchecked(2),
-                    *self.data.get_unchecked(3),
-                    *self.data.get_unchecked(4),
-                    *self.data.get_unchecked(5),
-                    *self.data.get_unchecked(6),
-                    *self.data.get_unchecked(7),
-                ]).to_object(py)
-            },
-            other => {
-                println!("cannot infer {:?}", other);
-                let v = vec![self.data.to_object(py), self.type_value.to_object(py)];
-                v.to_object(py)
-            },
-        }
+fn adapt(py: Python, row: &tokio_postgres::Row, ind: usize) -> PyObject {
+    match row.columns().index(ind).name() {
+        "int2" => row.get::<_, i16>(ind).to_object(py),
+        "int4" => row.get::<_, i32>(ind).to_object(py),
+        "int8" => row.get::<_, i64>(ind).to_object(py),
+        "text" => row.get::<_, String>(ind).to_object(py),
+        "bool" => row.get::<_, bool>(ind).to_object(py),
+        _ => todo!(),
     }
 }
 
 #[pyproto]
 impl PyMappingProtocol for Row {
     fn __getitem__(&self, key: PyObject) -> PyResult<PyObject> {
-        Python::with_gil(|py| {
-            match key.extract::<usize>(py) {
-                Ok(ind) => Ok(self._row.get::<usize, Value>(ind).to_object(py)),
-                _ => {
-                    match key.extract::<String>(py) {
-                        Ok(rust_key) => Python::with_gil(|py| {
-                            match self._row
-                                .columns()
-                                .iter()
-                                .enumerate()
-                                .filter(|(ind, col)| col.name().to_string() == rust_key)
-                                .next() {
-                                None => Err(PyKeyError::new_err(key)),
-                                Some((ind, _)) => Ok(self._row.get::<usize, Value>(ind).to_object(py)),
-                            }
-                        }),
-                        Err(e) => Err(PyKeyError::new_err(key)),
+        Python::with_gil(|py| match key.extract::<usize>(py) {
+            Ok(ind) => Ok(adapt(py, &self._row, ind)),
+            _ => match key.extract::<String>(py) {
+                Ok(rust_key) => Python::with_gil(|py| {
+                    match self
+                        ._row
+                        .columns()
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, col)| col.name().to_string() == rust_key)
+                        .next()
+                    {
+                        None => Err(PyKeyError::new_err(key)),
+                        Some((ind, _)) => Ok(adapt(py, &self._row, ind)),
                     }
-                }
-            }
+                }),
+                Err(_) => Err(PyKeyError::new_err(key)),
+            },
         })
     }
 }
 
 impl Connection {
     async fn _execute(&self, query: String) -> Result<u64, LibError> {
-        Ok(self.client.execute(query.as_str(), &[]).await.map_err(LibError::from)?)
+        Ok(self
+            .client
+            .execute(query.as_str(), &[])
+            .await
+            .map_err(LibError::from)?)
     }
 
     async fn _fetchrow(&self, query: String) -> Result<Row, LibError> {
-        let row = self.client.query_one(query.as_str(), &[]).await.map_err(LibError::from)?;
+        let row = self
+            .client
+            .query_one(query.as_str(), &[])
+            .await
+            .map_err(LibError::from)?;
         println!("{:?}", row);
         Ok(Row { _row: row })
     }
@@ -145,7 +96,7 @@ impl Connection {
         pyo3_asyncio::tokio::future_into_py(py, async move {
             match slf._execute(query).await {
                 Err(e) => Err(PyErr::from(e)),
-                Ok(v) => Ok(Python::with_gil(|py| v.to_object(py)))
+                Ok(v) => Ok(Python::with_gil(|py| v.to_object(py))),
             }
         })
     }
@@ -155,7 +106,7 @@ impl Connection {
         pyo3_asyncio::tokio::future_into_py(py, async move {
             match slf._fetchrow(query).await {
                 Err(e) => Err(PyErr::from(e)),
-                Ok(v) => Ok(Python::with_gil(|py| v.into_py(py)))
+                Ok(v) => Ok(Python::with_gil(|py| v.into_py(py))),
             }
         })
     }
@@ -164,7 +115,6 @@ impl Connection {
         self.handle.abort();
     }
 }
-
 
 #[pyfunction]
 fn connect(py: Python, dsn: String) -> PyResult<&PyAny> {
@@ -178,10 +128,15 @@ fn connect(py: Python, dsn: String) -> PyResult<&PyAny> {
             }
         });
         Ok(Python::with_gil(|py| {
-            PyCell::new(py, Connection {
-                client: Arc::new(client),
-                handle: Arc::new(handle),
-            }).unwrap().to_object(py)
+            PyCell::new(
+                py,
+                Connection {
+                    client: Arc::new(client),
+                    handle: Arc::new(handle),
+                },
+            )
+            .unwrap()
+            .to_object(py)
         }))
     })
 }

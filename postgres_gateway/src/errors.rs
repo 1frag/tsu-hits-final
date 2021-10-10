@@ -1,6 +1,5 @@
+use pyo3::{self, PyErr};
 use tokio_postgres;
-use pyo3;
-use pyo3::PyErr;
 
 pub struct LibError {
     code: i32,
@@ -12,7 +11,10 @@ unsafe impl Sync for LibError {}
 
 impl From<tokio_postgres::Error> for LibError {
     fn from(e: tokio_postgres::Error) -> Self {
-        LibError {code: 1, detail: format!("{:?}", e)}
+        LibError {
+            code: 1,
+            detail: format!("{:?}", e),
+        }
     }
 }
 
