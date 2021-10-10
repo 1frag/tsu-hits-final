@@ -28,7 +28,7 @@ jobs:
         uses: actions-rs/cargo@v1
         with:
           command: fmt
-          args: -- --check
+          args: --manifest-path postgres_gateway/Cargo.toml -- --check
       - run: pip install -r requirements/requirements.txt -r requirements/requirements.test.txt
       - run: python setup.py develop
       - run: pytest -vv
