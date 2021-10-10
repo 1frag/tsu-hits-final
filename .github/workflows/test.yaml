@@ -1,7 +1,6 @@
 name: Run Tests
 
 on: [push]
-
 jobs:
   test-postgres-gateway:
     runs-on: ubuntu-latest
@@ -23,12 +22,14 @@ jobs:
           toolchain: nightly
           default: true
           components: rustfmt
-      - run: cd postgres_gateway
       - name: Ensure `cargo fmt` has been run
         uses: actions-rs/cargo@v1
         with:
           command: fmt
           args: --manifest-path postgres_gateway/Cargo.toml -- --check
       - run: pip install -r requirements/requirements.txt -r requirements/requirements.test.txt
+        working-directory: ./postgres_gateway
       - run: python setup.py develop
+        working-directory: ./postgres_gateway
       - run: pytest -vv
+        working-directory: ./postgres_gateway
