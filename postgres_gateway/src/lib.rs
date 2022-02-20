@@ -148,16 +148,31 @@ fn adapt(py: Python, row: &tokio_postgres::Row, ind: usize) -> PyObject {
     }
     match row.columns().index(ind).type_().name() {
         "int2" => row.get::<_, i16>(ind).to_object(py),
+        "_int2" => row.get::<_, Vec<i16>>(ind).to_object(py),
         "int4" => row.get::<_, i32>(ind).to_object(py),
+        "_int4" => row.get::<_, Vec<i32>>(ind).to_object(py),
         "int8" => row.get::<_, i64>(ind).to_object(py),
+        "_int8" => row.get::<_, Vec<i64>>(ind).to_object(py),
         "text" => row.get::<_, String>(ind).to_object(py),
+        "_text" => row.get::<_, Vec<String>>(ind).to_object(py),
         "varchar" => row.get::<_, String>(ind).to_object(py),
+        "_varchar" => row.get::<_, Vec<String>>(ind).to_object(py),
         "char" => row.get::<_, String>(ind).to_object(py),
+        "_char" => row.get::<_, Vec<String>>(ind).to_object(py),
         "bpchar" => row.get::<_, String>(ind).to_object(py),
+        "_bpchar" => row.get::<_, Vec<String>>(ind).to_object(py),
         "bool" => row.get::<_, bool>(ind).to_object(py),
+        "_bool" => row.get::<_, Vec<bool>>(ind).to_object(py),
         "uuid" => row.get::<_, PyUUID>(ind).to_object(py),
-        "json" => PyJson(row.get::<_, serde_json::Value>(ind)).to_object(py),
-        "jsonb" => PyJson(row.get::<_, serde_json::Value>(ind)).to_object(py),
+        "_uuid" => row.get::<_, Vec<PyUUID>>(ind).to_object(py),
+        "json" | "jsonb" => PyJson(row.get::<_, serde_json::Value>(ind)).to_object(py),
+        "_json" | "_jsonb" => {
+            let lst = row.get::<_, Vec<serde_json::Value>>(ind);
+            lst.iter()
+                .map(|jsn| PyJson(jsn.clone()).to_object(py))
+                .collect::<Vec<PyObject>>()
+                .to_object(py)
+        },
         other => {
             let any_value = row.get::<_, AnyType>(ind).0;
             println!("{:?} {:?}", other, any_value);

@@ -65,3 +65,19 @@ async def test_jsons(tpe):
     assert dict(row) == {
         'nil': None, 'one': {'a': 'b', 'c': [1, 2, 3]}, 'two': 2, 'three': '123', 'four': ['ab', 1, False]
     }
+
+
+async def test_arrays():
+    conn = await postgres_gateway.connect(POSTGRES_DSN)
+    row = await conn.fetchrow("""
+        SELECT array[1, 2, 3] AS ints,
+               array['a', 'b', 'c'] AS strings,
+               array['{"a": 1}'::JSON, '{"b": 2}'::JSON] AS jsons,
+               array['{"a": 1}'::JSONB, '{"b": 2}'::JSONB] AS jsonbs;
+    """)
+    assert dict(row) == {
+        'ints': [1, 2, 3],
+        'strings': ['a', 'b', 'c'],
+        'jsons': [{'a': 1}, {'b': 2}],
+        'jsonbs': [{'a': 1}, {'b': 2}],
+    }
