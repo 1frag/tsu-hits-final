@@ -36,7 +36,8 @@ async def test_uuid():
     conn = await postgres_gateway.connect(POSTGRES_DSN)
     uid = uuid.uuid4()
     await conn.execute(f"""
-        CREATE TABLE IF NOT EXISTS abc(
+        DROP TABLE IF EXISTS abc;
+        CREATE TABLE IF NOT EXISTS abc (
             id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
             name TEXT
         );

@@ -5,7 +5,9 @@ use byteorder::{BigEndian, ReadBytesExt};
 use deadpool_postgres::tokio_postgres::types::Type;
 use once_cell::sync::OnceCell;
 use postgres_types::FromSql;
-use pyo3::{exceptions::PyKeyError, prelude::*, wrap_pyfunction, PyMappingProtocol};
+use pyo3::{
+    exceptions::PyKeyError, prelude::*, types::PyTuple, wrap_pyfunction, PyMappingProtocol,
+};
 use serde_json::Value;
 use std::{collections::HashMap, error::Error, ops::Index, sync::Arc};
 use tokio_postgres::NoTls;
@@ -172,7 +174,7 @@ fn adapt(py: Python, row: &tokio_postgres::Row, ind: usize) -> PyObject {
                 .map(|jsn| PyJson(jsn.clone()).to_object(py))
                 .collect::<Vec<PyObject>>()
                 .to_object(py)
-        },
+        }
         other => {
             let any_value = row.get::<_, AnyType>(ind).0;
             println!("{:?} {:?}", other, any_value);
@@ -215,6 +217,30 @@ impl Connection {
             .map_err(LibError::from)?)
     }
 
+    async fn _simple_execute(&self, query: String) -> Result<u64, LibError> {
+        match self.client.simple_query(query.as_str()).await {
+            Ok(res) => Ok(res.len() as u64),
+            Err(e) => match e.as_db_error() {
+                None => {
+                    println!("Unknown error: {}", e);
+                    return Err(LibError::from(e));
+                }
+                Some(t) => match t.code().code() {
+                    "23505" => {
+                        return Err(LibError {
+                            code: 23505,
+                            detail: t.constraint().map(|c| c.to_string()),
+                        })
+                    }
+                    _ => {
+                        println!("Unknown error: {} code={}", e, t.code().code());
+                        return Err(LibError::from(e));
+                    }
+                },
+            },
+        }
+    }
+
     async fn _fetchrow(&self, query: String) -> Result<Row, LibError> {
         let row = self
             .client
@@ -231,14 +257,24 @@ impl Connection {
 
 #[pymethods]
 impl Connection {
-    fn execute<'p>(&self, query: String, py: Python<'p>) -> PyResult<&'p PyAny> {
+    #[args(params = "*")]
+    fn execute<'p>(&self, query: String, params: &PyTuple, py: Python<'p>) -> PyResult<&'p PyAny> {
         let slf = self.clone();
-        pyo3_asyncio::tokio::future_into_py(py, async move {
-            match slf._execute(query).await {
-                Err(e) => Err(PyErr::from(e)),
-                Ok(v) => Ok(Python::with_gil(|py| v.to_object(py))),
-            }
-        })
+        if params.len() > 0 {
+            pyo3_asyncio::tokio::future_into_py(py, async move {
+                match slf._execute(query).await {
+                    Err(e) => Err(PyErr::from(e)),
+                    Ok(v) => Ok(Python::with_gil(|py| v.to_object(py))),
+                }
+            })
+        } else {
+            pyo3_asyncio::tokio::future_into_py(py, async move {
+                match slf._simple_execute(query).await {
+                    Err(e) => Err(PyErr::from(e)),
+                    Ok(v) => Ok(Python::with_gil(|py| v.to_object(py))),
+                }
+            })
+        }
     }
 
     fn fetchrow<'p>(&self, query: String, py: Python<'p>) -> PyResult<&'p PyAny> {
@@ -285,8 +321,14 @@ fn connect(py: Python, dsn: String) -> PyResult<&PyAny> {
 fn postgres_gateway(py: Python<'_>, m: &PyModule) -> PyResult<()> {
     m.add_class::<Connection>()?;
     m.add_class::<Row>()?;
+
     m.add_function(wrap_pyfunction!(connect, m)?)?;
     m.add_function(wrap_pyfunction!(create_uuid, m)?)?;
+
+    m.add(
+        "UniqueViolationError",
+        py.get_type::<errors::UniqueViolationError>(),
+    )?;
 
     let uuid_module = py.import("uuid")?;
     let uuid_class = uuid_module.getattr("UUID")?.to_object(py);
